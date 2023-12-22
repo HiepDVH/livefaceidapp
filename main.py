@@ -1,5 +1,4 @@
 import os
-import time
 from types import SimpleNamespace
 from typing import List
 
@@ -268,10 +267,9 @@ def draw_annotations(
 
 
 def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
-    tic = time.time()
     # Convert frame to numpy array
     frame = frame.to_ndarray(format='rgb24')
-
+    print(len(frame))
     # Run face detection
     detections = detect_faces(frame)
 
@@ -283,11 +281,10 @@ def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
 
     # Draw annotations
     frame = draw_annotations(frame, detections, matches)
-
+    print(len(frame))
     # Convert frame back to av.VideoFrame
     frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
-    toc = time.time()
-    print(1 / (toc - tic))
+
     return frame
 
 
@@ -317,18 +314,18 @@ gallery = []
 for file in files:
     # Read file bytes
     file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
-
+    print(type(file))
     # Decode image and convert from BGR to RGB
     img = cv2.cvtColor(cv2.imdecode(file_bytes, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
-
+    #   print(f'len_img: {type(img)}, {len(img)}')
     # Detect faces
     detections = detect_faces(img)
 
     if detections:
         # recognize faces
         subjects = recognize_faces(img, detections[:1])  # take only one face
-
         # Add subjects to gallery
+        # print(f'type_ospath:{type(os.path.splitext(file.name)[0])}')
         gallery.append(
             Identity(
                 name=os.path.splitext(file.name)[0],

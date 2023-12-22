@@ -1,7 +1,9 @@
+import argparse
+import pickle
+import time
 from types import SimpleNamespace
 from typing import List
 
-import av
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -34,9 +36,12 @@ class Match(SimpleNamespace):
 
 SIMILARITY_THRESHOLD = 1.0
 
-FACE_RECOGNIZER = rt.InferenceSession("model.onnx", providers=rt.get_available_providers())
+FACE_RECOGNIZER = rt.InferenceSession('model.onnx', providers=rt.get_available_providers())
 FACE_DETECTOR = mp.solutions.face_mesh.FaceMesh(
-    refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5, max_num_faces=7
+    refine_landmarks=True,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5,
+    max_num_faces=7,
 )
 
 
@@ -56,7 +61,10 @@ def detect_faces(frame: np.ndarray) -> List[Detection]:
 
             # Extract the x and y coordinates of the landmarks of interest
             landmarks = np.asarray(
-                [[landmark.x * frame.shape[1], landmark.y * frame.shape[0]] for landmark in five_landmarks]
+                [
+                    [landmark.x * frame.shape[1], landmark.y * frame.shape[0]]
+                    for landmark in five_landmarks
+                ]
             )
 
             # Extract the x and y coordinates of all landmarks
@@ -105,13 +113,36 @@ def recognize_faces(frame: np.ndarray, detections: List[Detection]) -> List[Iden
         # INFERENCE -----------------------------------------------------------
         # Inference face embeddings with onnxruntime
         input_image = (np.asarray([face_aligned]).astype(np.float32) / 255.0).clip(0.0, 1.0)
-        embedding = FACE_RECOGNIZER.run(None, {"input_image": input_image})[0][0]
+        embedding = FACE_RECOGNIZER.run(None, {'input_image': input_image})[0][0]
         # ---------------------------------------------------------------------
 
         # Create Identity object
         identities.append(Identity(detection=detection, embedding=embedding, face=face_aligned))
 
     return identities
+
+def extract_faces(frame: np.ndarray, detections: List[Detection]) -> np.ndarray:
+    if not detections:
+        return []
+
+    for detection in detections:
+        # ALIGNMENT -----------------------------------------------------------
+        # Target landmark coordinates (as used in training)
+        landmarks_target = np.array(
+            [
+                [38.2946, 51.6963],
+                [73.5318, 51.5014],
+                [56.0252, 71.7366],
+                [41.5493, 92.3655],
+                [70.7299, 92.2041],
+            ],
+            dtype=np.float32,
+        )
+        tform = SimilarityTransform()
+        tform.estimate(detection.landmarks, landmarks_target)
+        tmatrix = tform.params[0:2, :]
+        face_aligned = cv2.warpAffine(frame, tmatrix, (112, 112), borderValue=0.0)
+    return face_aligned
 
 
 def match_faces(subjects: List[Identity], gallery: List[Identity]) -> List[Match]:
@@ -131,7 +162,13 @@ def match_faces(subjects: List[Identity], gallery: List[Identity]) -> List[Match
         dists_to_identity = cos_distances[ident_idx]
         idx_min = np.argmin(dists_to_identity)
         if dists_to_identity[idx_min] < SIMILARITY_THRESHOLD:
-            matches.append(Match(subject_id=identity, gallery_id=gallery[idx_min], distance=dists_to_identity[idx_min]))
+            matches.append(
+                Match(
+                    subject_id=identity,
+                    gallery_id=gallery[idx_min],
+                    distance=dists_to_identity[idx_min],
+                )
+            )
 
     # Sort Matches by identity_idx
     matches = sorted(matches, key=lambda match: match.gallery_id.name)
@@ -139,7 +176,9 @@ def match_faces(subjects: List[Identity], gallery: List[Identity]) -> List[Match
     return matches
 
 
-def draw_annotations(frame: np.ndarray, detections: List[Detection], matches: List[Match]) -> np.ndarray:
+def draw_annotations(
+    frame: np.ndarray, detections: List[Detection], matches: List[Match]
+) -> np.ndarray:
     shape = np.asarray(frame.shape[:2][::-1])
 
     # Upscale frame to 1080p for better visualization of drawn annotations
@@ -208,24 +247,10 @@ def draw_annotations(frame: np.ndarray, detections: List[Detection], matches: Li
             -1,
         )
 
-        # Draw Name
+        # Draw Distance and Name
         cv2.putText(
             frame,
-            name,
-            (
-                ((detection.bbox[0][0] + shape[0] // 400) * upscale_factor[0]).astype(int),
-                ((detection.bbox[0][1] - shape[1] // 50) * upscale_factor[1]).astype(int),
-            ),
-            cv2.LINE_AA,
-            0.7,
-            (0, 0, 0),
-            2,
-        )
-
-        # Draw Distance
-        cv2.putText(
-            frame,
-            f" Distance: {match.distance:.2f}",
+            f' Distance: {match.distance:.2f}, name:{name}',
             (
                 ((detection.bbox[0][0] + shape[0] // 400) * upscale_factor[0]).astype(int),
                 ((detection.bbox[0][1] - shape[1] // 350) * upscale_factor[1]).astype(int),
@@ -239,10 +264,7 @@ def draw_annotations(frame: np.ndarray, detections: List[Detection], matches: Li
     return frame
 
 
-def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
-    # Convert frame to numpy array
-    frame = frame.to_ndarray(format="rgb24")
-
+def video_frame_callback(frame: np.ndarray) -> np.ndarray:
     # Run face detection
     detections = detect_faces(frame)
 
@@ -255,7 +277,71 @@ def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
     # Draw annotations
     frame = draw_annotations(frame, detections, matches)
 
-    # Convert frame back to av.VideoFrame
-    frame = av.VideoFrame.from_ndarray(frame, format="rgb24")
-
     return frame
+
+
+# with open('feature.pkl', 'rb') as file:
+#     gallery = pickle.load(file)
+# for i in gallery:
+#     print(type(i))
+# parser = argparse.ArgumentParser()
+
+# parser.add_argument(
+#     '--video-path',
+#     type=str,
+#     help='video path',
+#     required=True,
+# )
+
+# args = parser.parse_args()
+
+# cap = cv2.VideoCapture(args.video_path)
+
+
+# if not cap.isOpened():
+#     print('Không thể mở video đầu vào.')
+#     exit()
+
+
+# fps = int(cap.get(cv2.CAP_PROP_FPS))
+# width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+# height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+# output_video_path = 'output_video.mp4'
+# fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
+# out = cv2.VideoWriter(output_video_path, fourcc, fps, (1920, 1080))
+
+# start_time = time.time()
+
+# while True:
+#     ret, frame = cap.read()
+
+#     if not ret:
+#         break
+
+#     frame = video_frame_callback(frame)
+#     end_time = time.time()
+#     elapsed_time = end_time - start_time
+#     real_fps = 1 / elapsed_time
+
+#     cv2.putText(
+#         frame,
+#         f'FPS: {real_fps:.2f}',
+#         (10, 30),
+#         cv2.FONT_HERSHEY_SIMPLEX,
+#         1,
+#         (0, 255, 0),
+#         2,
+#     )
+
+#     # frame.resize((height, width, 3))
+#     frame = frame.astype(np.uint8)
+
+#     out.write(frame)
+
+#     start_time = time.time()
+
+# cap.release()
+# out.release()
+# cv2.destroyAllWindows()
