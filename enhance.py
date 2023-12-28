@@ -23,7 +23,7 @@ def enhance_frame(frame):
     DCE_net = EnhanceModel.enhance_net_nopool(scale_factor).cpu()
     DCE_net.load_state_dict(
         torch.load(
-            'Zero-DCE++/snapshots_Zero_DCE++/Epoch99.pth',
+            'EnhanceModel.pth',
             map_location=torch.device('cpu'),
         )
     )
@@ -43,7 +43,7 @@ def process_video(input_path, output_path):
     DCE_net = EnhanceModel.enhance_net_nopool(scale_factor).cpu()
     DCE_net.load_state_dict(
         torch.load(
-            '/home/livefaceidapp/Zero-DCE++/snapshots_Zero_DCE++/Epoch99.pth',
+            'EnhanceModel.pth',
             map_location=torch.device('cpu'),
         )
     )
