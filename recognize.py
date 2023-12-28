@@ -349,7 +349,7 @@ if __name__ == '__main__':
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    output_video_path = 'output_video/output_video4.mp4'
+    output_video_path = 'output_video.mp4'
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (1920, 1080))

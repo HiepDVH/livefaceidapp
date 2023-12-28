@@ -29,7 +29,7 @@ def enhance_frame(frame):
         )
         enhanced_frame, params_maps = DCE_net(frame)
 
-        enhanced_frame = enhanced_frame[0].permute(1, 2, 0).cpu().numpy() * 255.0
+        enhanced_frame = enhanced_frame[0].permute(1, 2, 0).cpu().detach().numpy() * 255.0
 
         return enhanced_frame
     else:
