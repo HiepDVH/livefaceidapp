@@ -1,10 +1,10 @@
 import os
 
 import cv2
+import EnhanceModel
 import numpy as np
 import torch
 import torch.optim
-import zero_dce
 
 
 def enhance_frame(frame):
@@ -20,7 +20,7 @@ def enhance_frame(frame):
     frame = frame.permute(2, 0, 1)
     frame = frame.cpu().unsqueeze(0)
 
-    DCE_net = zero_dce.enhance_net_nopool(scale_factor).cpu()
+    DCE_net = EnhanceModel.enhance_net_nopool(scale_factor).cpu()
     DCE_net.load_state_dict(
         torch.load(
             'Zero-DCE++/snapshots_Zero_DCE++/Epoch99.pth',
@@ -40,7 +40,7 @@ def process_video(input_path, output_path):
     scale_factor = 12
 
     # Load mô hình DCE_net
-    DCE_net = zero_dce.enhance_net_nopool(scale_factor).cpu()
+    DCE_net = EnhanceModel.enhance_net_nopool(scale_factor).cpu()
     DCE_net.load_state_dict(
         torch.load(
             '/home/livefaceidapp/Zero-DCE++/snapshots_Zero_DCE++/Epoch99.pth',

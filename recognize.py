@@ -1,7 +1,12 @@
+import argparse
+import os
+import pickle
+import time
 from types import SimpleNamespace
 from typing import List
 
 import cv2
+import enhance
 import mediapipe as mp
 import numpy as np
 import onnxruntime as rt
@@ -33,7 +38,7 @@ class Match(SimpleNamespace):
 
 SIMILARITY_THRESHOLD = 0.7
 
-FACE_RECOGNIZER = rt.InferenceSession('model.onnx', providers=rt.get_available_providers())
+FACE_RECOGNIZER = rt.InferenceSession('RecognizeModel.onnx', providers=rt.get_available_providers())
 FACE_DETECTOR = mp.solutions.face_mesh.FaceMesh(
     refine_landmarks=True,
     min_detection_confidence=0.5,
@@ -141,6 +146,47 @@ def extract_faces(frame: np.ndarray, detections: List[Detection]) -> np.ndarray:
         tmatrix = tform.params[0:2, :]
         face_aligned = cv2.warpAffine(frame, tmatrix, (112, 112), borderValue=0.0)
     return face_aligned
+
+
+def extract_feature(
+    database_path: str = '/home/livefaceidapp/database',
+    feature_path: str = 'feature.pkl',
+) -> None:
+    # Get a list of image files in the database
+    image_files = [f for f in os.listdir(database_path) if f.endswith(('png', 'jpg', 'jpeg'))]
+
+    # Process image files and add to gallery
+    gallery = []
+    list_detections = []
+    faces = []
+    for file_name in image_files:
+        # Construct the full path to the image file
+        file_path = os.path.join(database_path, file_name)
+
+        # Read file bytes
+        file_bytes = np.asarray(bytearray(open(file_path, 'rb').read()), dtype=np.uint8)
+
+        # Decode image and convert from BGR to RGB
+        img = cv2.cvtColor(cv2.imdecode(file_bytes, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+        # Detect faces
+        detections = detect_faces(img)
+        list_detections.append(detections)
+        if detections:
+            # Recognize faces
+            subjects = recognize_faces(img, detections[:1])  # take only one face
+            faces.append(extract_faces(img, detections[:1]))
+            # Add subjects to gallery
+            gallery.append(
+                Identity(
+                    name=os.path.splitext(file_name)[0],
+                    embedding=subjects[0].embedding,
+                    face=subjects[0].face,
+                )
+            )
+
+    with open(feature_path, 'wb') as file:
+        pickle.dump(gallery, file)
 
 
 def match_faces(subjects: List[Identity], gallery: List[Identity]) -> List[Match]:
@@ -278,4 +324,66 @@ def video_frame_callback(frame: np.ndarray, gallery) -> np.ndarray:
     return frame
 
 
+if __name__ == '__main__':
+    # extract_feature()
+    with open('feature.pkl', 'rb') as file:
+        gallery = pickle.load(file)
+    parser = argparse.ArgumentParser()
 
+    parser.add_argument(
+        '--video-path',
+        type=str,
+        help='video path',
+        required=True,
+    )
+
+    args = parser.parse_args()
+
+    cap = cv2.VideoCapture(args.video_path)
+
+    if not cap.isOpened():
+        print('Không thể mở video đầu vào.')
+        exit()
+
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    output_video_path = 'output_video/output_video4.mp4'
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (1920, 1080))
+
+    start_time = time.time()
+
+    while True:
+        ret, frame = cap.read()
+
+        if not ret:
+            break
+
+        frame = enhance.enhance_frame(frame)
+
+        frame = frame.astype('uint8')
+        frame = video_frame_callback(frame, gallery)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        real_fps = int(1 / elapsed_time)
+
+        cv2.putText(
+            frame,
+            f'FPS: {real_fps:.2f}',
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 0),
+            2,
+        )
+
+        out.write(frame)
+
+        start_time = time.time()
+
+    cap.release()
+    out.release()
+    cv2.destroyAllWindows()
