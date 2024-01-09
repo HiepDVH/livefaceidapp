@@ -1,4 +1,3 @@
-import argparse
 import os
 import pickle
 import time
@@ -36,7 +35,7 @@ class Match(SimpleNamespace):
     name: str = None
 
 
-SIMILARITY_THRESHOLD = 0.7
+SIMILARITY_THRESHOLD = 1.0
 
 FACE_RECOGNIZER = rt.InferenceSession('RecognizeModel.onnx', providers=rt.get_available_providers())
 FACE_DETECTOR = mp.solutions.face_mesh.FaceMesh(
@@ -189,35 +188,102 @@ def extract_feature(
         pickle.dump(gallery, file)
 
 
-def match_faces(subjects: List[Identity], gallery: List[Identity]) -> List[Match]:
+def extract_feature_dict(
+    database_path: str = '/home/livefaceidapp/database',
+    feature_path: str = 'feature.pkl',
+) -> None:
+    # Get a list of image files in the database
+    image_files = [f for f in os.listdir(database_path) if f.endswith(('png', 'jpg', 'jpeg'))]
+
+    # Process image files and add to gallery
+    gallery = {}
+    list_detections = []
+    faces = []
+    for file_name in image_files:
+        # Construct the full path to the image file
+        file_path = os.path.join(database_path, file_name)
+
+        # Read file bytes
+        file_bytes = np.asarray(bytearray(open(file_path, 'rb').read()), dtype=np.uint8)
+
+        # Decode image and convert from BGR to RGB
+        img = cv2.cvtColor(cv2.imdecode(file_bytes, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+        # Detect faces
+        detections = detect_faces(img)
+        list_detections.append(detections)
+        if detections:
+            # Recognize faces
+            subjects = recognize_faces(img, detections[:1])  # take only one face
+            faces.append(extract_faces(img, detections[:1]))
+            # Add subjects to gallery
+            gallery[os.path.splitext(file_name)[0]] = Identity(
+                name=os.path.splitext(file_name)[0],
+                embedding=subjects[0].embedding,
+                face=subjects[0].face,
+            )
+
+    with open(feature_path, 'wb') as file:
+        pickle.dump(gallery, file)
+
+
+def match_faces(subjects: List[Identity], dict_gallery: dict, id: str) -> List[Match]:
     if len(gallery) == 0 or len(subjects) == 0:
         return []
 
     # Get Embeddings
-    embs_gal = np.asarray([identity.embedding for identity in gallery])
-    embs_det = np.asarray([identity.embedding for identity in subjects])
+    embs_gal = np.asarray([dict_gallery[id].embedding])
+    embs_det = np.asarray([subjects[0].embedding])
 
     # Calculate Cosine Distances
     cos_distances = cosine_distances(embs_det, embs_gal)
 
     # Find Matches
     matches = []
-    for ident_idx, identity in enumerate(subjects):
-        dists_to_identity = cos_distances[ident_idx]
-        idx_min = np.argmin(dists_to_identity)
-        if dists_to_identity[idx_min] < SIMILARITY_THRESHOLD:
-            matches.append(
-                Match(
-                    subject_id=identity,
-                    gallery_id=gallery[idx_min],
-                    distance=dists_to_identity[idx_min],
-                )
+
+    dists_to_identity = cos_distances[0]
+    idx_min = np.argmin(dists_to_identity)
+    if dists_to_identity[idx_min] < SIMILARITY_THRESHOLD:
+        matches.append(
+            Match(
+                subject_id=subjects[0],
+                gallery_id=dict_gallery[id],
+                distance=dists_to_identity[0],
             )
-
-    # Sort Matches by identity_idx
-    matches = sorted(matches, key=lambda match: match.gallery_id.name)
-
+        )
+    # if len(matches) != 0:
+    #     print(True)
+    # else:
+    #     print(False)
     return matches
+
+
+def check_appearance(subjects: List[Identity], dict_gallery: dict, id: str) -> bool:
+    # Get Embeddings
+    embs_gal = np.asarray([dict_gallery[id].embedding])
+    embs_det = np.asarray([subjects[0].embedding])
+
+    # Calculate Cosine Distances
+    cos_distances = cosine_distances(embs_det, embs_gal)
+
+    # Find Matches
+    matches = []
+
+    dists_to_identity = cos_distances[0]
+    idx_min = np.argmin(dists_to_identity)
+    if dists_to_identity[idx_min] < SIMILARITY_THRESHOLD:
+        matches.append(
+            Match(
+                subject_id=subjects[0],
+                gallery_id=dict_gallery[id],
+                distance=dists_to_identity[0],
+            )
+        )
+
+    if len(matches) != 0:
+        return True, matches[0].distance
+    else:
+        return False
 
 
 def draw_annotations(
@@ -308,7 +374,33 @@ def draw_annotations(
     return frame
 
 
-def video_frame_callback(frame: np.ndarray, gallery) -> np.ndarray:
+def video_frame_callback(frame: np.ndarray, gallery, id: str) -> np.ndarray:
+    # Run face detection
+    detections = detect_faces(frame)
+
+    # Run face recognition
+    subjects = recognize_faces(frame, detections)
+
+    # Run face matching
+    matches = match_faces(subjects, gallery, id)
+
+    # Draw annotations
+    frame = draw_annotations(frame, detections, matches)
+
+    return frame
+
+
+def check_appearance_callback(frame: np.ndarray, gallery, id: str) -> bool:
+    # Run face detection
+    detections = detect_faces(frame)
+
+    # Run face recognition
+    subjects = recognize_faces(frame, detections)
+
+    return check_appearance(subjects, gallery, id)
+
+
+def check_recognize(frame: np.ndarray, gallery, video_name) -> bool:
     # Run face detection
     detections = detect_faces(frame)
 
@@ -318,72 +410,81 @@ def video_frame_callback(frame: np.ndarray, gallery) -> np.ndarray:
     # Run face matching
     matches = match_faces(subjects, gallery)
 
-    # Draw annotations
-    frame = draw_annotations(frame, detections, matches)
-
-    return frame
+    for match in matches:
+        name = match.gallery_id.name
+        if name == video_name:
+            return True
+    return False
 
 
 if __name__ == '__main__':
-    # extract_feature()
-    with open('feature.pkl', 'rb') as file:
+    with open('feature_dict.pkl', 'rb') as file:
         gallery = pickle.load(file)
-    parser = argparse.ArgumentParser()
+    num_recognize = 0
+    num_not_recognize = 0
+    low_light_videos = '/home/hiepdvh/low-light-recognition/low-light-video'
+    for video in os.listdir(low_light_videos):
+        print(video)
+        count = 0
+        video_path = os.path.join(low_light_videos, video)
+        cap = cv2.VideoCapture(video_path)
 
-    parser.add_argument(
-        '--video-path',
-        type=str,
-        help='video path',
-        required=True,
-    )
+        if not cap.isOpened():
+            print('Không thể mở video đầu vào.')
+            exit()
 
-    args = parser.parse_args()
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    cap = cv2.VideoCapture(args.video_path)
+        output_folder = '/home/hiepdvh/low-light-recognition/output_video'
+        output_video_path = os.path.join(output_folder, video)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 
-    if not cap.isOpened():
-        print('Không thể mở video đầu vào.')
-        exit()
-
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    output_video_path = 'output_video.mp4'
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-
-    out = cv2.VideoWriter(output_video_path, fourcc, fps, (1920, 1080))
-
-    start_time = time.time()
-
-    while True:
-        ret, frame = cap.read()
-
-        if not ret:
-            break
-
-        frame = enhance.enhance_frame(frame)
-
-        frame = frame.astype('uint8')
-        frame = video_frame_callback(frame, gallery)
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        real_fps = int(1 / elapsed_time)
-
-        cv2.putText(
-            frame,
-            f'FPS: {real_fps:.2f}',
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 255, 0),
-            2,
-        )
-
-        out.write(frame)
+        out = cv2.VideoWriter(output_video_path, fourcc, fps, (1920, 1080))
 
         start_time = time.time()
 
-    cap.release()
-    out.release()
-    cv2.destroyAllWindows()
+        while True:
+            video_name = video.split('.')[0]
+            ret, frame = cap.read()
+
+            if not ret:
+                # print(count)
+                # if count >= 100:
+                #     num_recognize += 1
+                # else:
+                #     num_not_recognize += 1
+                break
+
+            frame = enhance.enhance_frame(frame)
+
+            frame = frame.astype('uint8')
+            frame = video_frame_callback(frame, gallery, video_name)
+            # is_recognized = check_recognize(frame, gallery, video_name)
+            # if is_recognized:
+            #     count += 1
+            # print(count)
+            # print(check_appearance_callback(frame, gallery, video_name))
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            real_fps = int(1 / elapsed_time)
+
+            cv2.putText(
+                frame,
+                f'FPS: {real_fps:.2f}',
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 0),
+                2,
+            )
+
+            out.write(frame)
+
+            start_time = time.time()
+
+        cap.release()
+        out.release()
+        cv2.destroyAllWindows()
+    print(num_recognize, num_not_recognize)
