@@ -10,13 +10,13 @@ import torchvision
 from PIL import Image
 
 
-def lowlight(image_path):
+def lowlight(data_lowlight):
+    start = time.time()
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     scale_factor = 12
-    data_lowlight = Image.open(image_path)
 
     data_lowlight = data_lowlight.convert('RGB')
-    print(type(data_lowlight))
+
     data_lowlight = np.asarray(data_lowlight) / 255.0
 
     data_lowlight = torch.from_numpy(data_lowlight).float()
@@ -28,21 +28,13 @@ def lowlight(image_path):
     data_lowlight = data_lowlight.cuda().unsqueeze(0)
 
     DCE_net = model.enhance_net_nopool(scale_factor).cuda()
-    DCE_net.load_state_dict(torch.load('snapshots_Zero_DCE++/Epoch14.pth'))
+    DCE_net.load_state_dict(torch.load('snapshots_Zero_DCE++/Epoch99.pth'))
     start = time.time()
     enhanced_image, params_maps = DCE_net(data_lowlight)
 
     end_time = time.time() - start
 
-    print(end_time)
-    image_path = image_path.replace('test_data', 'result_Zero_DCE++')
-
-    result_path = image_path
-    if not os.path.exists(image_path.replace('/' + image_path.split('/')[-1], '')):
-        os.makedirs(image_path.replace('/' + image_path.split('/')[-1], ''))
-    # import pdb;pdb.set_trace()
-    torchvision.utils.save_image(enhanced_image, result_path)
-    return end_time
+    return enhanced_image
 
 
 def lowlight_frame(frame, DCE_net, scale_factor):
@@ -69,6 +61,12 @@ def lowlight_frame(frame, DCE_net, scale_factor):
     return enhanced_frame
 
 
+def adjust_brightness_cv2(frame, brightness_factor=1.5):
+    enhanced_img = np.clip(frame * brightness_factor, 0, 255).astype(np.uint8)
+
+    return enhanced_img
+
+
 def process_video(input_path, output_path):
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -76,7 +74,11 @@ def process_video(input_path, output_path):
 
     # Load mô hình DCE_net
     DCE_net = model.enhance_net_nopool(scale_factor).cuda()
-    DCE_net.load_state_dict(torch.load('snapshots_Zero_DCE++/Epoch99.pth'))
+    DCE_net.load_state_dict(
+        torch.load(
+            'first-train/Epoch99.pth',
+        )
+    )
 
     # Mở video input
     cap = cv2.VideoCapture(input_path)
@@ -95,6 +97,7 @@ def process_video(input_path, output_path):
                 break
             resized_frame = cv2.resize(frame, (1920, 1080))
             enhanced_frame = lowlight_frame(resized_frame, DCE_net, scale_factor)
+            # enhanced_frame = adjust_brightness_cv2(resized_frame, brightness_factor=4)
             out.write(enhanced_frame.astype(np.uint8))
 
     cap.release()
@@ -102,20 +105,28 @@ def process_video(input_path, output_path):
     cv2.destroyAllWindows()
 
 
-# if __name__ == '__main__':
-#     with torch.no_grad():
-#         filePath = 'data/test_data/'
-#         file_list = os.listdir(filePath)
-#         sum_time = 0
-#         for file_name in file_list:
-#             test_list = glob.glob(filePath + file_name + '/*')
-#             for image in test_list:
-#                 print(image)
-#                 sum_time = sum_time + lowlight(image)
-#         print(sum_time)
-
 if __name__ == '__main__':
-    input_video_path = 'test1.mp4'
-    output_video_path = 'test1_high.mp4'
+    test_low_light_images = os.listdir(
+        '/home/hiepdvh/low-light-recognition-trial/Zero-DCE++/lol_dataset/eval15/low'
+    )
 
-    process_video(input_video_path, output_video_path)
+    for low_light_image in test_low_light_images:
+        low_light_image_path = os.path.join(
+            '/home/hiepdvh/low-light-recognition-trial/Zero-DCE++/lol_dataset/eval15/low',
+            low_light_image,
+        )
+        original_image = Image.open(low_light_image_path)
+        enhanced_image = lowlight(original_image)
+        result_path = os.path.join(
+            '/home/hiepdvh/low-light-recognition-trial/Zero-DCE++/lol_dataset/eval15/high',
+            low_light_image,
+        )
+        torchvision.utils.save_image(enhanced_image, result_path)
+# if __name__ == '__main__':
+#     for video in os.listdir('/home/hiepdvh/low-light-recognition/Zero-DCE++/video-test'):
+#         input_video_path = f'/home/hiepdvh/low-light-recognition/Zero-DCE++/video-test/{video}'
+#         output_video_dir_path = '/home/hiepdvh/low-light-recognition/Zero-DCE++/video-testenhanced'
+#         if not os.path.exists(output_video_dir_path):
+#             os.mkdir(output_video_dir_path)
+#         output_video_path = os.path.join(output_video_dir_path, f'{video}')
+#         process_video(input_video_path, output_video_path)

@@ -6,6 +6,7 @@ import model
 import Myloss
 import torch
 import torch.optim
+import matplotlib as plt
 
 
 def weights_init(m):
@@ -37,7 +38,6 @@ def train(config):
     L_color = Myloss.L_color()
     L_spa = Myloss.L_spa()
     L_exp = Myloss.L_exp(16)
-    # L_exp = Myloss.L_exp(16,0.6)
     L_TV = Myloss.L_TV()
 
     optimizer = torch.optim.Adam(
@@ -54,7 +54,6 @@ def train(config):
 
             enhanced_image, A = DCE_net(img_lowlight)
             Loss_TV = 1600 * L_TV(A)
-            # Loss_TV = 200*L_TV(A)
             loss_spa = torch.mean(L_spa(enhanced_image, img_lowlight))
             loss_col = 5 * torch.mean(L_color(enhanced_image))
 
@@ -67,7 +66,7 @@ def train(config):
             loss.backward()
             torch.nn.utils.clip_grad_norm(DCE_net.parameters(), config.grad_clip_norm)
             optimizer.step()
-
+            
             if ((iteration + 1) % config.display_iter) == 0:
                 print('Loss at iteration', iteration + 1, ':', loss.item())
             if ((iteration + 1) % config.snapshot_iter) == 0:
@@ -99,5 +98,5 @@ if __name__ == '__main__':
 
     if not os.path.exists(config.snapshots_folder):
         os.mkdir(config.snapshots_folder)
-
-    train(config)
+    print(type(config))
+    # train(config)
