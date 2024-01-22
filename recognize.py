@@ -1,6 +1,5 @@
 import os
 import pickle
-import time
 from types import SimpleNamespace
 from typing import List
 
@@ -13,13 +12,11 @@ from skimage.transform import SimilarityTransform
 from sklearn.metrics.pairwise import cosine_distances
 
 
-# Define a class to store a detection
 class Detection(SimpleNamespace):
     bbox: List[List[float]] = None
     landmarks: List[List[float]] = None
 
 
-# Define a class to store an identity
 class Identity(SimpleNamespace):
     detection: Detection = Detection()
     name: str = None
@@ -27,22 +24,21 @@ class Identity(SimpleNamespace):
     face: np.ndarray = None
 
 
-# Define a class to store a match
 class Match(SimpleNamespace):
     subject_id: Identity = Identity()
-    gallery_id: Identity = Identity()
     distance: float = None
     name: str = None
 
 
-SIMILARITY_THRESHOLD = 1.0
+SIMILARITY_THRESHOLD = 0.7
 
 FACE_RECOGNIZER = rt.InferenceSession('RecognizeModel.onnx', providers=rt.get_available_providers())
+
 FACE_DETECTOR = mp.solutions.face_mesh.FaceMesh(
     refine_landmarks=True,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5,
-    max_num_faces=7,
+    max_num_faces=3,
 )
 
 
@@ -93,7 +89,6 @@ def recognize_faces(frame: np.ndarray, detections: List[Detection]) -> List[Iden
 
     identities = []
     for detection in detections:
-        # ALIGNMENT -----------------------------------------------------------
         # Target landmark coordinates (as used in training)
         landmarks_target = np.array(
             [
@@ -109,11 +104,10 @@ def recognize_faces(frame: np.ndarray, detections: List[Detection]) -> List[Iden
         tform.estimate(detection.landmarks, landmarks_target)
         tmatrix = tform.params[0:2, :]
         face_aligned = cv2.warpAffine(frame, tmatrix, (112, 112), borderValue=0.0)
-        # ---------------------------------------------------------------------
 
-        # INFERENCE -----------------------------------------------------------
         # Inference face embeddings with onnxruntime
         input_image = (np.asarray([face_aligned]).astype(np.float32) / 255.0).clip(0.0, 1.0)
+
         embedding = FACE_RECOGNIZER.run(None, {'input_image': input_image})[0][0]
         # ---------------------------------------------------------------------
 
@@ -128,7 +122,6 @@ def extract_faces(frame: np.ndarray, detections: List[Detection]) -> np.ndarray:
         return []
 
     for detection in detections:
-        # ALIGNMENT -----------------------------------------------------------
         # Target landmark coordinates (as used in training)
         landmarks_target = np.array(
             [
@@ -144,11 +137,12 @@ def extract_faces(frame: np.ndarray, detections: List[Detection]) -> np.ndarray:
         tform.estimate(detection.landmarks, landmarks_target)
         tmatrix = tform.params[0:2, :]
         face_aligned = cv2.warpAffine(frame, tmatrix, (112, 112), borderValue=0.0)
+
     return face_aligned
 
 
 def extract_feature(
-    database_path: str = '/home/livefaceidapp/database',
+    database_path: str = '/home/recognize/database',
     feature_path: str = 'feature.pkl',
 ) -> None:
     # Get a list of image files in the database
@@ -183,57 +177,57 @@ def extract_feature(
                     face=subjects[0].face,
                 )
             )
-
+    if os.path.exists(feature_path):
+        os.remove(feature_path)
     with open(feature_path, 'wb') as file:
         pickle.dump(gallery, file)
 
 
 def extract_feature_dict(
-    database_path: str = '/home/livefaceidapp/database',
+    database_path: str = '/home/recognize/database',
     feature_path: str = 'feature.pkl',
 ) -> None:
-    # Get a list of image files in the database
-    image_files = [f for f in os.listdir(database_path) if f.endswith(('png', 'jpg', 'jpeg'))]
-
-    # Process image files and add to gallery
+    # Get a list of subfolder in the database
+    students = os.listdir(database_path)
     gallery = {}
-    list_detections = []
-    faces = []
-    for file_name in image_files:
-        # Construct the full path to the image file
-        file_path = os.path.join(database_path, file_name)
+    for student in students:
+        # Get a list of image files in the subfolder
+        student_path = os.path.join(database_path, student)
+        image_files = [f for f in os.listdir(student_path) if f.endswith(('png', 'jpg', 'jpeg'))]
+        gallery[student] = []
+        # Process image files and add to gallery
 
-        # Read file bytes
-        file_bytes = np.asarray(bytearray(open(file_path, 'rb').read()), dtype=np.uint8)
+        for file_name in image_files:
+            # Construct the full path to the image file
+            file_path = os.path.join(student_path, file_name)
+            # Read file bytes
+            file_bytes = np.asarray(bytearray(open(file_path, 'rb').read()), dtype=np.uint8)
 
-        # Decode image and convert from BGR to RGB
-        img = cv2.cvtColor(cv2.imdecode(file_bytes, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+            # Decode image and convert from BGR to RGB
+            img = cv2.cvtColor(cv2.imdecode(file_bytes, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
 
-        # Detect faces
-        detections = detect_faces(img)
-        list_detections.append(detections)
-        if detections:
-            # Recognize faces
-            subjects = recognize_faces(img, detections[:1])  # take only one face
-            faces.append(extract_faces(img, detections[:1]))
-            # Add subjects to gallery
-            gallery[os.path.splitext(file_name)[0]] = Identity(
-                name=os.path.splitext(file_name)[0],
-                embedding=subjects[0].embedding,
-                face=subjects[0].face,
-            )
+            # Detect faces
+            detections = detect_faces(img)
 
+            if detections:
+                # Recognize faces
+                subjects = recognize_faces(img, detections[:1])  # take only one face
+
+                # Add subjects to gallery
+                gallery[student].append(subjects[0].embedding)
+        gallery[student] = np.asarray(gallery[student])
+    # for key, value in gallery.items():
+    #     print(f"{key}: {value.shape}")
     with open(feature_path, 'wb') as file:
         pickle.dump(gallery, file)
 
 
 def match_faces(subjects: List[Identity], dict_gallery: dict, id: str) -> List[Match]:
-    if len(gallery) == 0 or len(subjects) == 0:
+    if len(dict_gallery) == 0 or len(subjects) == 0:
         return []
 
-    # Get Embeddings
-    embs_gal = np.asarray([dict_gallery[id].embedding])
-    embs_det = np.asarray([subjects[0].embedding])
+    embs_gal = dict_gallery[id]
+    embs_det = np.asarray([subject.embedding for subject in subjects])
 
     # Calculate Cosine Distances
     cos_distances = cosine_distances(embs_det, embs_gal)
@@ -241,16 +235,15 @@ def match_faces(subjects: List[Identity], dict_gallery: dict, id: str) -> List[M
     # Find Matches
     matches = []
 
-    dists_to_identity = cos_distances[0]
-    idx_min = np.argmin(dists_to_identity)
-    if dists_to_identity[idx_min] < SIMILARITY_THRESHOLD:
-        matches.append(
-            Match(
-                subject_id=subjects[0],
-                gallery_id=dict_gallery[id],
-                distance=dists_to_identity[0],
+    for index, distance in enumerate(cos_distances):
+        if distance < SIMILARITY_THRESHOLD:
+            matches.append(
+                Match(
+                    subject_id=subjects[index],
+                    distance=float(distance),
+                    name=id,
+                )
             )
-        )
     # if len(matches) != 0:
     #     print(True)
     # else:
@@ -258,120 +251,168 @@ def match_faces(subjects: List[Identity], dict_gallery: dict, id: str) -> List[M
     return matches
 
 
-def check_appearance(subjects: List[Identity], dict_gallery: dict, id: str) -> bool:
-    # Get Embeddings
-    embs_gal = np.asarray([dict_gallery[id].embedding])
+def is_matched(subjects: List[Identity], features: np.ndarray):
     embs_det = np.asarray([subjects[0].embedding])
 
     # Calculate Cosine Distances
-    cos_distances = cosine_distances(embs_det, embs_gal)
+    cos_distances = cosine_distances(features, embs_det)
 
     # Find Matches
-    matches = []
+    matches = 0
 
-    dists_to_identity = cos_distances[0]
-    idx_min = np.argmin(dists_to_identity)
-    if dists_to_identity[idx_min] < SIMILARITY_THRESHOLD:
-        matches.append(
-            Match(
-                subject_id=subjects[0],
-                gallery_id=dict_gallery[id],
-                distance=dists_to_identity[0],
-            )
-        )
+    for distance in cos_distances:
+        if distance < SIMILARITY_THRESHOLD:
+            matches += 1
 
-    if len(matches) != 0:
-        return True, matches[0].distance
+    if matches > features.shape[0] / 2:
+        return 1
     else:
-        return False
+        return 0
+
+
+def is_matched_triton(subject: np.ndarray, features: np.ndarray):
+    # Calculate Cosine Distances
+    cos_distances = cosine_distances(features, subject)
+
+    # Find Matches
+    matches = 0
+
+    for distance in cos_distances:
+        if distance < SIMILARITY_THRESHOLD:
+            matches += 1
+
+    if matches > features.shape[0] / 2:
+        return 1
+    else:
+        return 0
 
 
 def draw_annotations(
-    frame: np.ndarray, detections: List[Detection], matches: List[Match]
+    frame: np.ndarray,
+    detections: List[Detection],
+    matches: List[Match],
+    is_stranger: bool = False,
 ) -> np.ndarray:
-    shape = np.asarray(frame.shape[:2][::-1])
+    if not is_stranger:
+        shape = np.asarray(frame.shape[:2][::-1])
 
-    # Upscale frame to 1080p for better visualization of drawn annotations
-    frame = cv2.resize(frame, (1920, 1080))
-    upscale_factor = np.asarray([1920 / shape[0], 1080 / shape[1]])
-    shape = np.asarray(frame.shape[:2][::-1])
+        # Upscale frame to 1080p for better visualization of drawn annotations
+        frame = cv2.resize(frame, (1920, 1080))
+        upscale_factor = np.asarray([1920 / shape[0], 1080 / shape[1]])
+        shape = np.asarray(frame.shape[:2][::-1])
 
-    # Make frame writeable (for better performance)
-    frame.flags.writeable = True
+        # Make frame writeable (for better performance)
+        frame.flags.writeable = True
 
-    # Draw Detections
-    for detection in detections:
-        # Draw Landmarks
-        for landmark in detection.landmarks:
-            cv2.circle(frame, (landmark * upscale_factor).astype(int), 2, (255, 255, 255), -1)
+        # Draw Detections
+        for detection in detections:
+            # Draw Landmarks
+            for landmark in detection.landmarks:
+                cv2.circle(frame, (landmark * upscale_factor).astype(int), 2, (255, 255, 255), -1)
 
-        # Draw Bounding Box
-        cv2.rectangle(
-            frame,
-            (detection.bbox[0] * upscale_factor).astype(int),
-            (detection.bbox[1] * upscale_factor).astype(int),
-            (255, 0, 0),
-            2,
-        )
+            # Draw Bounding Box
+            cv2.rectangle(
+                frame,
+                (detection.bbox[0] * upscale_factor).astype(int),
+                (detection.bbox[1] * upscale_factor).astype(int),
+                (255, 0, 0),
+                2,
+            )
 
-        # Draw Index
-        cv2.putText(
-            frame,
-            str(detection.idx),
-            (
-                ((detection.bbox[1][0] + 2) * upscale_factor[0]).astype(int),
-                ((detection.bbox[1][1] + 2) * upscale_factor[1]).astype(int),
-            ),
-            cv2.LINE_AA,
-            0.5,
-            (0, 0, 0),
-            2,
-        )
+        # Draw Matches
+        for match in matches:
+            detection = match.subject_id.detection
+            name = match.name
 
-    # Draw Matches
-    for match in matches:
-        detection = match.subject_id.detection
-        name = match.gallery_id.name
+            # Draw Bounding Box in green
+            cv2.rectangle(
+                frame,
+                (detection.bbox[0] * upscale_factor).astype(int),
+                (detection.bbox[1] * upscale_factor).astype(int),
+                (0, 255, 0),
+                2,
+            )
 
-        # Draw Bounding Box in green
-        cv2.rectangle(
-            frame,
-            (detection.bbox[0] * upscale_factor).astype(int),
-            (detection.bbox[1] * upscale_factor).astype(int),
-            (0, 255, 0),
-            2,
-        )
+            # Draw Banner
+            cv2.rectangle(
+                frame,
+                (
+                    (detection.bbox[0][0] * upscale_factor[0]).astype(int),
+                    (detection.bbox[0][1] * upscale_factor[1] - (shape[1] // 25)).astype(int),
+                ),
+                (
+                    (detection.bbox[1][0] * upscale_factor[0]).astype(int),
+                    (detection.bbox[0][1] * upscale_factor[1]).astype(int),
+                ),
+                (255, 255, 255),
+                -1,
+            )
 
-        # Draw Banner
-        cv2.rectangle(
-            frame,
-            (
-                (detection.bbox[0][0] * upscale_factor[0]).astype(int),
-                (detection.bbox[0][1] * upscale_factor[1] - (shape[1] // 25)).astype(int),
-            ),
-            (
-                (detection.bbox[1][0] * upscale_factor[0]).astype(int),
-                (detection.bbox[0][1] * upscale_factor[1]).astype(int),
-            ),
-            (255, 255, 255),
-            -1,
-        )
+            # Draw Distance and Name
+            cv2.putText(
+                frame,
+                f' Distance: {match.distance:.2f}, name:{name}',
+                (
+                    ((detection.bbox[0][0] + shape[0] // 400) * upscale_factor[0]).astype(int),
+                    ((detection.bbox[0][1] - shape[1] // 350) * upscale_factor[1]).astype(int),
+                ),
+                cv2.LINE_AA,
+                0.5,
+                (0, 0, 0),
+                2,
+            )
 
-        # Draw Distance and Name
-        cv2.putText(
-            frame,
-            f' Distance: {match.distance:.2f}, name:{name}',
-            (
-                ((detection.bbox[0][0] + shape[0] // 400) * upscale_factor[0]).astype(int),
-                ((detection.bbox[0][1] - shape[1] // 350) * upscale_factor[1]).astype(int),
-            ),
-            cv2.LINE_AA,
-            0.5,
-            (0, 0, 0),
-            2,
-        )
+        return frame
+    else:
+        shape = np.asarray(frame.shape[:2][::-1])
 
-    return frame
+        # Upscale frame to 1080p for better visualization of drawn annotations
+        frame = cv2.resize(frame, (1920, 1080))
+        upscale_factor = np.asarray([1920 / shape[0], 1080 / shape[1]])
+        shape = np.asarray(frame.shape[:2][::-1])
+
+        # Make frame writeable (for better performance)
+        frame.flags.writeable = True
+
+        for detection in detections:
+            # Draw Bounding Box in green
+            cv2.rectangle(
+                frame,
+                (detection.bbox[0] * upscale_factor).astype(int),
+                (detection.bbox[1] * upscale_factor).astype(int),
+                (0, 255, 0),
+                2,
+            )
+
+            # Draw Banner
+            cv2.rectangle(
+                frame,
+                (
+                    (detection.bbox[0][0] * upscale_factor[0]).astype(int),
+                    (detection.bbox[0][1] * upscale_factor[1] - (shape[1] // 25)).astype(int),
+                ),
+                (
+                    (detection.bbox[1][0] * upscale_factor[0]).astype(int),
+                    (detection.bbox[0][1] * upscale_factor[1]).astype(int),
+                ),
+                (255, 255, 255),
+                -1,
+            )
+
+            # Draw Name: Stranger
+            cv2.putText(
+                frame,
+                ' Name: Stranger',
+                (
+                    ((detection.bbox[0][0] + shape[0] // 400) * upscale_factor[0]).astype(int),
+                    ((detection.bbox[0][1] - shape[1] // 350) * upscale_factor[1]).astype(int),
+                ),
+                cv2.LINE_AA,
+                0.5,
+                (0, 0, 0),
+                2,
+            )
+        return frame
 
 
 def video_frame_callback(frame: np.ndarray, gallery, id: str) -> np.ndarray:
@@ -380,24 +421,31 @@ def video_frame_callback(frame: np.ndarray, gallery, id: str) -> np.ndarray:
 
     # Run face recognition
     subjects = recognize_faces(frame, detections)
+    if id in gallery:
+        # Run face matching
+        matches = match_faces(subjects, gallery, id)
 
-    # Run face matching
-    matches = match_faces(subjects, gallery, id)
-
-    # Draw annotations
-    frame = draw_annotations(frame, detections, matches)
-
+        # Draw annotations
+        frame = draw_annotations(frame, detections, matches)
+    else:
+        is_stranger = True
+        matches = []
+        # Draw annotations
+        frame = draw_annotations(frame, detections, matches, is_stranger)
     return frame
 
 
-def check_appearance_callback(frame: np.ndarray, gallery, id: str) -> bool:
+def check_appearance(frame: np.ndarray, features) -> bool:
     # Run face detection
+
     detections = detect_faces(frame)
 
     # Run face recognition
     subjects = recognize_faces(frame, detections)
 
-    return check_appearance(subjects, gallery, id)
+    if len(subjects) == 0:
+        return 0
+    return is_matched(subjects, features)
 
 
 def check_recognize(frame: np.ndarray, gallery, video_name) -> bool:
@@ -418,73 +466,41 @@ def check_recognize(frame: np.ndarray, gallery, video_name) -> bool:
 
 
 if __name__ == '__main__':
-    with open('feature_dict.pkl', 'rb') as file:
+    with open('lowlight.h5', 'rb') as file:
         gallery = pickle.load(file)
     num_recognize = 0
-    num_not_recognize = 0
-    low_light_videos = '/home/hiepdvh/low-light-recognition/low-light-video'
-    for video in os.listdir(low_light_videos):
-        print(video)
-        count = 0
-        video_path = os.path.join(low_light_videos, video)
-        cap = cv2.VideoCapture(video_path)
+    num_videos = 0
+    MOOCFace = '/home/edtechai/aiserver/ai_dev/LowlightDataset/low-light-short-video'
+    for student_videos in os.listdir(MOOCFace):
+        student_videos_path = os.path.join(MOOCFace, student_videos)
+        for video in os.listdir(student_videos_path):
+            print(video)
+            num_videos += 1
+            num_recognize_frame = 0
+            video_path = os.path.join(student_videos_path, video)
+            cap = cv2.VideoCapture(video_path)
 
-        if not cap.isOpened():
-            print('Không thể mở video đầu vào.')
-            exit()
+            if not cap.isOpened():
+                print('Không thể mở video đầu vào.')
+                exit()
 
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            while True:
+                ret, frame = cap.read()
 
-        output_folder = '/home/hiepdvh/low-light-recognition/output_video'
-        output_video_path = os.path.join(output_folder, video)
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                if not ret:
+                    if num_recognize_frame > 0:
+                        num_recognize += 1
+                    break
 
-        out = cv2.VideoWriter(output_video_path, fourcc, fps, (1920, 1080))
+                frame = enhance.enhance_frame(frame)
 
-        start_time = time.time()
+                frame = frame.astype('uint8')
+                features = gallery[student_videos]
+                if check_appearance(frame, features) == 1:
+                    num_recognize_frame += 1
+                else:
+                    num_recognize_frame -= 1
 
-        while True:
-            video_name = video.split('.')[0]
-            ret, frame = cap.read()
-
-            if not ret:
-                # print(count)
-                # if count >= 100:
-                #     num_recognize += 1
-                # else:
-                #     num_not_recognize += 1
-                break
-
-            frame = enhance.enhance_frame(frame)
-
-            frame = frame.astype('uint8')
-            frame = video_frame_callback(frame, gallery, video_name)
-            # is_recognized = check_recognize(frame, gallery, video_name)
-            # if is_recognized:
-            #     count += 1
-            # print(count)
-            # print(check_appearance_callback(frame, gallery, video_name))
-            end_time = time.time()
-            elapsed_time = end_time - start_time
-            real_fps = int(1 / elapsed_time)
-
-            cv2.putText(
-                frame,
-                f'FPS: {real_fps:.2f}',
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 255, 0),
-                2,
-            )
-
-            out.write(frame)
-
-            start_time = time.time()
-
-        cap.release()
-        out.release()
-        cv2.destroyAllWindows()
-    print(num_recognize, num_not_recognize)
+            cap.release()
+            cv2.destroyAllWindows()
+            print(num_recognize, num_videos)
